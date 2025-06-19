@@ -1,7 +1,9 @@
+moviepy
+opencv-python-headless
 streamlit
-opencv-python
-transformers
 torch
+transformers
 Pillow
 numpy
+
 
