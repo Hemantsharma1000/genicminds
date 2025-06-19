@@ -1,5 +1,6 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Animal-Focused Image Captioner & Classifier
 
 This repository implements an end-to-end pipeline that:
@@ -20,6 +21,9 @@ This repository implements an end-to-end pipeline that:
 # Genic_Mind_AI
 Company Work
 >>>>>>> 02f649f286a252a4ca9c1631bd0d216c9d63f470
+=======
+# genicminds
+>>>>>>> cef11e88c18dc636b9a39691eb237717aed94cda
 =======
 # genicminds
 >>>>>>> cef11e88c18dc636b9a39691eb237717aed94cda
