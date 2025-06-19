@@ -4,10 +4,10 @@ import os
 import random
 import tempfile
 import torch
-import cv2
 import numpy as np
 import streamlit as st
 from PIL import Image
+from moviepy.editor import VideoFileClip
 
 from src.utils import (
     load_caption_model,
@@ -94,7 +94,18 @@ def classify_image(pil_img: Image.Image) -> str:
 
     return f"[ANIMAL_{display.upper()}] {caption}"
 
-from moviepy.editor import VideoFileClip
+def extract_frames_with_moviepy(video_path, outdir, fps=5, start=0.0, end=10.0):
+    clip = VideoFileClip(video_path).subclip(start, end)
+    duration = clip.duration
+    timestamps = [t for t in np.arange(0, duration, 1.0/fps)]
+
+    for i, t in enumerate(timestamps):
+        frame = clip.get_frame(t)
+        img = Image.fromarray(frame)
+        frame_path = os.path.join(outdir, f"frame_{i:04d}.jpg")
+        img.save(frame_path)
+
+    clip.close()
 
 def classify_video_bytes(video_bytes) -> str:
     tmp_vid = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
@@ -108,9 +119,8 @@ def classify_video_bytes(video_bytes) -> str:
     clip.close()
 
     end = min(30.0, dur)
-    from video_utils import extract_frames
     outdir = tempfile.mkdtemp()
-    extract_frames(tmp_vid.name, outdir, int(fps), 0.0, end)
+    extract_frames_with_moviepy(tmp_vid.name, outdir, fps=int(fps), start=0.0, end=end)
 
     jpgs = sorted(f for f in os.listdir(outdir) if f.endswith(".jpg"))
     batches = [jpgs[i:i+5] for i in range(0, len(jpgs), 5)]
@@ -129,25 +139,25 @@ def classify_video_bytes(video_bytes) -> str:
 
     return "\n".join(results)
 
-
 # ── 3. Streamlit UI ───────────────────────────────────────────────────────────
 st.title("🦁 Animal Captioner & Classifier")
 
 mode = st.sidebar.radio("Mode", ["Image", "Video"])
 if mode == "Image":
-    img = st.file_uploader("Upload an image", type=["jpg","jpeg","png"])
+    img = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
     if img:
         pil = Image.open(img).convert("RGB")
         st.image(pil, use_column_width=True)
         caption = classify_image(pil)
         st.markdown(f"**Caption:** {caption}")
 else:
-    vid = st.file_uploader("Upload a video (<=30s)", type=["mp4","mov","avi"])
+    vid = st.file_uploader("Upload a video (<=30s)", type=["mp4", "mov", "avi"])
     if vid:
         st.video(vid)
         st.markdown("**Results:**")
         res = classify_video_bytes(vid)
         st.text(res)
+
 
 
 
