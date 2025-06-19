@@ -94,18 +94,18 @@ def classify_image(pil_img: Image.Image) -> str:
 
     return f"[ANIMAL_{display.upper()}] {caption}"
 
+from moviepy.editor import VideoFileClip
+
 def classify_video_bytes(video_bytes) -> str:
-    # write to temp file
     tmp_vid = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     tmp_vid.write(video_bytes.read())
     tmp_vid.flush()
     tmp_vid.close()
 
-    cap = cv2.VideoCapture(tmp_vid.name)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    cnt = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
-    dur = cnt / fps if fps else 0.0
-    cap.release()
+    clip = VideoFileClip(tmp_vid.name)
+    fps = clip.fps or 25.0
+    dur = clip.duration or 0.0
+    clip.close()
 
     end = min(30.0, dur)
     from video_utils import extract_frames
@@ -113,21 +113,22 @@ def classify_video_bytes(video_bytes) -> str:
     extract_frames(tmp_vid.name, outdir, int(fps), 0.0, end)
 
     jpgs = sorted(f for f in os.listdir(outdir) if f.endswith(".jpg"))
-    batches = [jpgs[i:i+5] for i in range(0,len(jpgs),5)]
+    batches = [jpgs[i:i+5] for i in range(0, len(jpgs), 5)]
     picks = [random.choice(b) for b in batches if b]
 
     results = []
     for name in picks:
-        img = Image.open(os.path.join(outdir,name)).convert("RGB")
+        img = Image.open(os.path.join(outdir, name)).convert("RGB")
         results.append(f"{name}: {classify_image(img)}")
 
     # cleanup
     for f in os.listdir(outdir):
-        os.unlink(os.path.join(outdir,f))
+        os.unlink(os.path.join(outdir, f))
     os.rmdir(outdir)
     os.unlink(tmp_vid.name)
 
     return "\n".join(results)
+
 
 # ── 3. Streamlit UI ───────────────────────────────────────────────────────────
 st.title("🦁 Animal Captioner & Classifier")
