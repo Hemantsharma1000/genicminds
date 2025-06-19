@@ -1,0 +1,17 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.pkl
+*.pt
+*.h5
+*.ckpt
+*.zip
+*.exe
+*.dll
+*.lib
+*.bin
+*.mp4
+*.mov
+*.avi
+*.mkv
