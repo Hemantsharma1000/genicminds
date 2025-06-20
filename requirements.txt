@@ -1,9 +1,10 @@
+streamlit
 moviepy
 opencv-python-headless
-streamlit
 torch
 transformers
 Pillow
 numpy
+
 
 
