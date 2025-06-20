@@ -1,23 +1,12 @@
 # File: app.py
 
 import os
-import sys
-import subprocess
-
-# ── 0. Ensure moviepy is installed at runtime ────────────────────────────────
-try:
-    import moviepy.editor as _mp
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "moviepy"])
-    import moviepy.editor as _mp
-
-from moviepy.editor import VideoFileClip
-
 import random
 import tempfile
 import torch
 import numpy as np
 import streamlit as st
+import cv2
 from PIL import Image
 
 from src.utils import (
@@ -48,9 +37,8 @@ def load_models():
     ]
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(DEVICE)
-    text_inputs = clip_processor(
-        text=prompts, return_tensors="pt", padding=True
-    ).to(DEVICE)
+
+    text_inputs = clip_processor(text=prompts, return_tensors="pt", padding=True).to(DEVICE)
     with torch.no_grad():
         text_embeds = clip_model.get_text_features(**text_inputs)
         text_embeds /= text_embeds.norm(dim=-1, keepdim=True)
@@ -119,18 +107,30 @@ def classify_image(pil_img: Image.Image) -> str:
 
     return f"[ANIMAL_{display.upper()}] {caption}"
 
-# ── 3. Video frame extraction with moviepy ────────────────────────────────────
-def extract_frames_with_moviepy(video_path, outdir, fps=5, start=0.0, end=10.0):
-    clip = VideoFileClip(video_path).subclip(start, end)
-    duration = clip.duration
-    timestamps = list(np.arange(0, duration, 1.0 / fps))
+# ── 3. Video frame extraction with OpenCV ────────────────────────────────────
+def extract_frames_with_cv2(video_path, outdir, target_fps=5, max_duration=30.0):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError("Failed to open video file")
 
-    for i, t in enumerate(timestamps):
-        frame = clip.get_frame(t)
-        img = Image.fromarray(frame)
-        img.save(os.path.join(outdir, f"frame_{i:04d}.jpg"))
+    vid_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    duration = frame_count / vid_fps
+    end_time = min(duration, max_duration)
 
-    clip.close()
+    # sample at target_fps over [0, end_time]
+    intervals = np.linspace(0, end_time, int(target_fps * end_time), endpoint=False)
+    for idx, t in enumerate(intervals):
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        # convert BGR→RGB
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(img)
+        img_pil.save(os.path.join(outdir, f"frame_{idx:04d}.jpg"))
+
+    cap.release()
 
 def classify_video_bytes(video_bytes) -> str:
     tmp_vid = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
@@ -138,17 +138,13 @@ def classify_video_bytes(video_bytes) -> str:
     tmp_vid.flush()
     tmp_vid.close()
 
-    clip = VideoFileClip(tmp_vid.name)
-    fps = clip.fps or 25.0
-    dur = clip.duration or 0.0
-    clip.close()
-
-    end = min(30.0, dur)
     outdir = tempfile.mkdtemp()
-    extract_frames_with_moviepy(tmp_vid.name, outdir, fps=int(fps), start=0.0, end=end)
+    # extract frames at 2 FPS up to 30 seconds
+    extract_frames_with_cv2(tmp_vid.name, outdir, target_fps=2, max_duration=30.0)
 
-    jpgs = sorted(f for f in os.listdir(outdir) if f.endswith(".jpg"))
-    batches = [jpgs[i : i + 5] for i in range(0, len(jpgs), 5)]
+    frames = sorted(f for f in os.listdir(outdir) if f.endswith(".jpg"))
+    # group into chunks of 5
+    batches = [frames[i : i + 5] for i in range(0, len(frames), 5)]
     picks = [random.choice(b) for b in batches if b]
 
     results = []
@@ -157,8 +153,8 @@ def classify_video_bytes(video_bytes) -> str:
         results.append(f"{name}: {classify_image(img)}")
 
     # cleanup
-    for f in os.listdir(outdir):
-        os.unlink(os.path.join(outdir, f))
+    for filename in os.listdir(outdir):
+        os.unlink(os.path.join(outdir, filename))
     os.rmdir(outdir)
     os.unlink(tmp_vid.name)
 
@@ -175,13 +171,12 @@ if mode == "Image":
         st.image(pil, use_column_width=True)
         st.markdown(f"**Caption:** {classify_image(pil)}")
 else:
-    vid = st.file_uploader(
-        "Upload a video (<=30s)", type=["mp4", "mov", "avi"]
-    )
+    vid = st.file_uploader("Upload a video (<=30s)", type=["mp4", "mov", "avi"])
     if vid:
         st.video(vid)
         st.markdown("**Results:**")
         st.text(classify_video_bytes(vid))
+
 
 
 
