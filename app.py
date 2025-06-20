@@ -1,13 +1,24 @@
-# File: app_streamlit.py
+# File: app.py
 
 import os
+import sys
+import subprocess
+
+# ── 0. Ensure moviepy is installed at runtime ────────────────────────────────
+try:
+    import moviepy.editor as _mp
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "moviepy"])
+    import moviepy.editor as _mp
+
+from moviepy.editor import VideoFileClip
+
 import random
 import tempfile
 import torch
 import numpy as np
 import streamlit as st
 from PIL import Image
-from moviepy.editor import VideoFileClip
 
 from src.utils import (
     load_caption_model,
@@ -25,7 +36,9 @@ st.set_page_config(page_title="Animal Captioner & Classifier", layout="wide")
 @st.cache_resource
 def load_models():
     processor, caption_model = load_caption_model()
-    classifier_model = load_explicit_classifier("animal_explicit_classifier.pth", num_classes=len(LABEL_NAMES))
+    classifier_model = load_explicit_classifier(
+        "animal_explicit_classifier.pth", num_classes=len(LABEL_NAMES)
+    )
 
     prompts = [
         "a safe animal photo",
@@ -35,17 +48,25 @@ def load_models():
     ]
     clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(DEVICE)
-    text_inputs = clip_processor(text=prompts, return_tensors="pt", padding=True).to(DEVICE)
+    text_inputs = clip_processor(
+        text=prompts, return_tensors="pt", padding=True
+    ).to(DEVICE)
     with torch.no_grad():
         text_embeds = clip_model.get_text_features(**text_inputs)
         text_embeds /= text_embeds.norm(dim=-1, keepdim=True)
 
-    return (processor, caption_model, classifier_model,
-            clip_processor, clip_model, text_embeds)
+    return (
+        processor,
+        caption_model,
+        classifier_model,
+        clip_processor,
+        clip_model,
+        text_embeds,
+    )
 
 processor, caption_model, classifier_model, clip_processor, clip_model, text_embeds = load_models()
 
-def zero_shot_clip(pil_img):
+def zero_shot_clip(pil_img: Image.Image):
     img_inputs = clip_processor(images=pil_img, return_tensors="pt").to(DEVICE)
     with torch.no_grad():
         img_embeds = clip_model.get_image_features(**img_inputs)
@@ -53,21 +74,25 @@ def zero_shot_clip(pil_img):
     sims = (img_embeds @ text_embeds.T).squeeze(0)
     return sims.softmax(dim=-1).cpu().tolist()
 
-# ── 2. Classification logic ────────────────────────────────────────────────────
+# ── 2. Image classification logic ─────────────────────────────────────────────
 def classify_image(pil_img: Image.Image) -> str:
     caption = generate_blip_caption(processor, caption_model, pil_img)
     cap_low = caption.lower()
 
-    # Keyword rules
-    gore_kw = {"blood","meat","flesh","dead","carcass","wound","gore","kill","predator","butcher","slaughter"}
-    cruelty_kw = {"chain","cage","tie","torture","abuse","hit","beat","kick","whip","punish","restraint"}
+    gore_kw = {
+        "blood", "meat", "flesh", "dead", "carcass",
+        "wound", "gore", "kill", "predator", "butcher", "slaughter"
+    }
+    cruelty_kw = {
+        "chain", "cage", "tie", "torture", "abuse",
+        "hit", "beat", "kick", "whip", "punish", "restraint"
+    }
 
     if any(k in cap_low for k in gore_kw):
         display = "animal_gore"
     elif any(k in cap_low for k in cruelty_kw):
         display = "animal_cruelty"
     else:
-        # CNN+CLIP fusion
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             pil_img.save(tmp.name)
             tensor = prepare_image_for_classifier(tmp.name)
@@ -77,33 +102,33 @@ def classify_image(pil_img: Image.Image) -> str:
         probs_clip = torch.tensor(zero_shot_clip(pil_img), device=DEVICE)
         probs = 0.6 * probs_cls + 0.4 * probs_clip
 
-        arr = np.array(pil_img.resize((224,224)))
-        r,g,b = arr[:,:,0], arr[:,:,1], arr[:,:,2]
-        if float(((r>150)&(r>1.2*g)&(r>1.2*b)).mean()) > 0.02:
+        arr = np.array(pil_img.resize((224, 224)))
+        r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+        if float(((r > 150) & (r > 1.2 * g) & (r > 1.2 * b)).mean()) > 0.02:
             original = "animal_gore"
         else:
             original = LABEL_NAMES[int(probs.argmax())]
 
         swap = {
-            "safe":"animal_cruelty",
-            "animal_cruelty":"animal_gore",
-            "animal_gore":"safe",
-            "animal_sexuality_nudity":"animal_sexuality_nudity",
+            "safe": "animal_cruelty",
+            "animal_cruelty": "animal_gore",
+            "animal_gore": "safe",
+            "animal_sexuality_nudity": "animal_sexuality_nudity",
         }
         display = swap.get(original, original)
 
     return f"[ANIMAL_{display.upper()}] {caption}"
 
+# ── 3. Video frame extraction with moviepy ────────────────────────────────────
 def extract_frames_with_moviepy(video_path, outdir, fps=5, start=0.0, end=10.0):
     clip = VideoFileClip(video_path).subclip(start, end)
     duration = clip.duration
-    timestamps = [t for t in np.arange(0, duration, 1.0/fps)]
+    timestamps = list(np.arange(0, duration, 1.0 / fps))
 
     for i, t in enumerate(timestamps):
         frame = clip.get_frame(t)
         img = Image.fromarray(frame)
-        frame_path = os.path.join(outdir, f"frame_{i:04d}.jpg")
-        img.save(frame_path)
+        img.save(os.path.join(outdir, f"frame_{i:04d}.jpg"))
 
     clip.close()
 
@@ -123,7 +148,7 @@ def classify_video_bytes(video_bytes) -> str:
     extract_frames_with_moviepy(tmp_vid.name, outdir, fps=int(fps), start=0.0, end=end)
 
     jpgs = sorted(f for f in os.listdir(outdir) if f.endswith(".jpg"))
-    batches = [jpgs[i:i+5] for i in range(0, len(jpgs), 5)]
+    batches = [jpgs[i : i + 5] for i in range(0, len(jpgs), 5)]
     picks = [random.choice(b) for b in batches if b]
 
     results = []
@@ -139,7 +164,7 @@ def classify_video_bytes(video_bytes) -> str:
 
     return "\n".join(results)
 
-# ── 3. Streamlit UI ───────────────────────────────────────────────────────────
+# ── 4. Streamlit UI ───────────────────────────────────────────────────────────
 st.title("🦁 Animal Captioner & Classifier")
 
 mode = st.sidebar.radio("Mode", ["Image", "Video"])
@@ -148,15 +173,16 @@ if mode == "Image":
     if img:
         pil = Image.open(img).convert("RGB")
         st.image(pil, use_column_width=True)
-        caption = classify_image(pil)
-        st.markdown(f"**Caption:** {caption}")
+        st.markdown(f"**Caption:** {classify_image(pil)}")
 else:
-    vid = st.file_uploader("Upload a video (<=30s)", type=["mp4", "mov", "avi"])
+    vid = st.file_uploader(
+        "Upload a video (<=30s)", type=["mp4", "mov", "avi"]
+    )
     if vid:
         st.video(vid)
         st.markdown("**Results:**")
-        res = classify_video_bytes(vid)
-        st.text(res)
+        st.text(classify_video_bytes(vid))
+
 
 
 
