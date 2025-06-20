@@ -5,6 +5,3 @@ torch
 transformers
 Pillow
 numpy
-
-
-
