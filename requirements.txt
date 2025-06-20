@@ -1,7 +1,7 @@
 streamlit
-moviepy
 opencv-python-headless
 torch
+torchvision
 transformers
 Pillow
 numpy
